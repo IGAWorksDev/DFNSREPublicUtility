@@ -14,6 +14,9 @@ on:
       target_slack_channel_url_pattern:
         required: true
         type: string
+      review_slack_channel_url:
+        required: true
+        type: string
     secrets:
       pat:
         required: true
@@ -46,11 +49,8 @@ jobs:
     if: github.event_name == 'issues' && github.event.action == 'edited'
     uses: ./.github/workflows/handle_edited_issue.yml
     with:
-      org: ${{ inputs.org }}
-      project_no: ${{ inputs.project_no }}
       target_slack_channel_url_pattern: ${{ inputs.target_slack_channel_url_pattern }}
     secrets:
-      pat: ${{ secrets.pat }}
       slack_app_secret: ${{ secrets.slack_app_secret }}
   delegate_issue_labled:
     if: github.event_name == 'issues' && github.event.action == 'labeled'
@@ -59,6 +59,7 @@ jobs:
       org: ${{ inputs.org }}
       project_no: ${{ inputs.project_no }}
       target_slack_channel_url_pattern: ${{ inputs.target_slack_channel_url_pattern }}
+      review_slack_channel_url: ${{ inputs.review_slack_channel_url }}
     secrets:
       pat: ${{ secrets.pat }}
       slack_app_secret: ${{ secrets.slack_app_secret }}
@@ -66,9 +67,6 @@ jobs:
     if: github.event_name == 'issue_comment' && (github.event.action == 'created' || github.event.action == 'edited')
     uses: ./.github/workflows/handle_issue_commented.yml
     with:
-      org: ${{ inputs.org }}
-      project_no: ${{ inputs.project_no }}
       target_slack_channel_url_pattern: ${{ inputs.target_slack_channel_url_pattern }}
     secrets:
-      pat: ${{ secrets.pat }}
       slack_app_secret: ${{ secrets.slack_app_secret }}
