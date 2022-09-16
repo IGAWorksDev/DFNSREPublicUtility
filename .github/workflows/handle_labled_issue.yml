@@ -1,0 +1,175 @@
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+# GitHub recommends pinning actions to a commit SHA.
+# To get a newer version, you will need to update the SHA.
+# You can also reference a tag or branch, but the action may change without warning.
+
+name: handle_labled_issue
+on:
+  issues:
+    types:
+      - labeled
+  workflow_call:
+    inputs:
+      org:
+        required: true
+        type: string
+      project_no:
+        required: true
+        type: number
+      target_slack_channel_url_pattern:
+        required: true
+        type: string
+      review_slack_channel_url:
+        required: true
+        type: string
+    secrets:
+      pat:
+        required: true
+      slack_app_secret:
+        required: true
+jobs:
+  track_issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get project data
+        if: github.event.label.name == 'review_requested'
+        env:
+          GITHUB_TOKEN: ${{ secrets.pat }}
+          ORGANIZATION: ${{ inputs.org }}
+          PROJECT_NUMBER: ${{ inputs.project_no }}
+          ISSUE_NODE_ID: ${{ github.event.issue.node_id }}
+        run: |
+          gh api graphql -f query='
+            query($org: String!, $number: Int!) {
+              organization(login: $org){
+                projectV2(number: $number) {
+                  id
+                  fields(first:20) {
+                    nodes {
+                      ... on ProjectV2Field {
+                        id
+                        name
+                      }
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        name
+                        options {
+                          id
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }' -f org=$ORGANIZATION -F number=$PROJECT_NUMBER > project_data.json
+
+          cat project_data.json
+          echo 'PROJECT_ID='$(jq '.data.organization.projectV2.id' project_data.json) >> $GITHUB_ENV
+          echo 'DATE_FIELD_ID='$(jq '.data.organization.projectV2.fields.nodes[] | select(.name== "Date closed") | .id' project_data.json) >> $GITHUB_ENV
+          echo 'STATUS_FIELD_ID='$(jq '.data.organization.projectV2.fields.nodes[] | select(.name== "Status") | .id' project_data.json) >> $GITHUB_ENV
+          echo 'ON_REVIEW_OPTION_ID='$(jq '.data.organization.projectV2.fields.nodes[] | select(.name== "Status") | .options[] | select(.name=="On Review") |.id' project_data.json) >> $GITHUB_ENV
+
+      - name: Get project item data
+        if: github.event.label.name == 'review_requested'
+        env:
+          GITHUB_TOKEN: ${{ secrets.pat }}
+          ORGANIZATION: ${{ inputs.org }}
+          PROJECT_NUMBER: ${{ inputs.project_no }}
+          ISSUE_NODE_ID: ${{ github.event.issue.node_id }}
+        run: |
+          prj_has_item=true
+          prj_item_cursor=
+          prj_item_id=
+          
+          if [ -z "$prj_item_id" ]; then
+            echo "empty"
+          else
+            echo "${prj_item_id}"
+          fi
+          
+          if [ "$prj_has_item" = "true" ]; then
+            echo "true"
+          else
+            echo "${prj_has_item}"
+          fi
+          
+          while [ -z "$prj_item_id" ] && [ "$prj_has_item" = "true" ]; do
+            gh api graphql -f query='
+              query($org: String!, $number: Int!, $cursor: String!) {
+                organization(login: $org){
+                  projectV2(number: $number) {
+                    id
+                    items(first:100 after:$cursor) {
+                      edges {
+                        node {
+                          id
+                          content {
+                            ... on Issue {
+                              id
+                            }
+                          }
+                        }
+                        cursor
+                      }
+                      pageInfo {
+                        endCursor
+                        hasNextPage
+                      }
+                    }
+                  }
+                }
+              }' -f cursor=$prj_item_cursor -f org=$ORGANIZATION -F number=$PROJECT_NUMBER > project_data.json
+
+            cat project_data.json
+            prj_item_id=$(jq '.data.organization.projectV2.items.edges[] | select(.node.content.id== "'${ISSUE_NODE_ID}'") | .node.id' project_data.json)
+            echo "${prj_item_id}"
+            
+            if [ -n "$prj_item_id" ]; then
+              echo 'PROJECT_ITEM_ID='$prj_item_id >> $GITHUB_ENV
+              break
+            fi
+            
+            prj_item_cursor=$(jq '.data.organization.projectV2.items.pageInfo.endCursor' project_data.json)
+            prj_has_item=$(jq '.data.organization.projectV2.items.pageInfo.hasNextPage' project_data.json)
+          done
+
+      - name: Send slack
+        if: github.event.label.name == 'review_requested'
+        env:
+          LABEL_NAME: ${{ github.event.label.name }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_USER_NAME: ${{ github.event.issue.user.login }}
+          REVIEW_SLACK_CHANNEL_URL: ${{ inputs.review_slack_channel_url }}
+        run: |
+          curl -X POST --data-urlencode "payload={\"channel\": \"#dfn-review-channel\", \"username\": \"DFN 이슈 트래커\", \"attachments\":[{\"color\":\"#0000D0\", \"fields\":[{\"title\":\"[리뷰 요청] ${ISSUE_TITLE}\",\"value\":\"${ISSUE_USER_NAME} 님의 리뷰 요청이 도착했습니다. 스레드에서 스케줄을 잡아주세요.\\r\\n - <${ISSUE_URL}|이슈 링크>\",\"short\":false}]}]}" ${REVIEW_SLACK_CHANNEL_URL}
+      - name: Set fields
+        if: github.event.label.name == 'review_requested'
+        env:
+          GITHUB_TOKEN: ${{ secrets.pat }}
+        run: |
+          gh api graphql -f query='
+            mutation (
+              $project: ID!
+              $item: ID!
+              $status_field: ID!
+              $status_value: String!
+            ) {
+              set_status: updateProjectV2ItemFieldValue(input: {
+                projectId: $project
+                itemId: $item
+                fieldId: $status_field
+                value: { 
+                  singleSelectOptionId: $status_value
+                  }
+              }) {
+                projectV2Item {
+                  id
+                  }
+              }
+            }' -f project=$PROJECT_ID -f item=$PROJECT_ITEM_ID -f status_field=$STATUS_FIELD_ID -f status_value=${{ env.ON_REVIEW_OPTION_ID }} --silent
