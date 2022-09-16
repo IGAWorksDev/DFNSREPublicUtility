@@ -1,0 +1,43 @@
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+# GitHub recommends pinning actions to a commit SHA.
+# To get a newer version, you will need to update the SHA.
+# You can also reference a tag or branch, but the action may change without warning.
+
+name: issue_edited
+on:
+  issues:
+    types:
+      - edited
+  workflow_call:
+    inputs:
+      target_slack_channel_url_pattern:
+        required: true
+        type: string
+    secrets:
+      slack_app_secret:
+        required: true
+jobs:
+  track_issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send slack
+        if: contains(github.event.issue.body, inputs.target_slack_channel_url_pattern)
+        env:
+          SLACK_TOKEN: ${{ secrets.slack_app_secret }}
+          SLACK_CHANNEL_URL_PATTERN: ${{ inputs.target_slack_channel_url_pattern }}
+          LABEL_NAME: ${{ github.event.label.name }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_USER_NAME: ${{ github.event.issue.user.login }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          slack_msg_url=$(echo $ISSUE_BODY | grep -Eo "${SLACK_CHANNEL_URL_PATTERN}[^ >]+" | head -1)
+          channel_id=$(echo $slack_msg_url | cut -d / -f 5)
+          slack_ts_str=${slack_msg_url##*/}
+          slack_ts_src=$(echo $slack_ts_str | tr -d -c 0-9)
+          slack_ts=$(echo ${slack_ts_src:0:10}.${slack_ts_src:10:6})
+          curl https://slack.com/api/chat.postMessage -X POST -H 'Content-type: application/json; charset=utf-8' -H "Authorization: Bearer ${SLACK_TOKEN}" --data "{\"channel\":\"${channel_id}\", \"attachments\":[{\"color\":\"#0000D0\", \"fields\":[{\"title\":\"[메시지 언급] ${ISSUE_TITLE}\",\"value\":\"${ISSUE_USER_NAME} 님이 아래 이슈에서 이 메시지를 언급했습니다.\\r\\n - <${ISSUE_URL}|이슈 링크>\",\"short\":false}]}], \"thread_ts\":\"${slack_ts}\"}"
