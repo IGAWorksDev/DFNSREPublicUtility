@@ -129,7 +129,7 @@ jobs:
               break
             fi
             
-            prj_item_cursor=$(jq '.data.organization.projectV2.items.pageInfo.endCursor' project_data.json)
+            prj_item_cursor=$(jq -r '.data.organization.projectV2.items.pageInfo.endCursor' project_data.json)
             prj_has_item=$(jq '.data.organization.projectV2.items.pageInfo.hasNextPage' project_data.json)
           done
 
